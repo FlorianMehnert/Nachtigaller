@@ -92,6 +92,19 @@ def create_anki_deck(topics, notes):
     return deck, media_files
 
 
+def calculate_progress(topics, notes):
+    total_questions = 0
+    answered_questions = 0
+    for topic, subtopics in topics.items():
+        for subtopic, questions in subtopics.items():
+            for i, question in enumerate(questions):
+                total_questions += 1
+                question_key = f"{topic}_{subtopic}_{i}"
+                if question_key in notes and notes[question_key].get('text', '').strip():
+                    answered_questions += 1
+    return answered_questions, total_questions
+
+
 # Streamlit app
 def main():
     st.title('Markdown Question Parser and Note Taker')
@@ -109,6 +122,13 @@ def main():
     if uploaded_file is not None:
         content = uploaded_file.getvalue().decode("utf-8")
         st.session_state.topics = parse_markdown(content)
+
+        # Calculate and display progress
+        answered, total = calculate_progress(st.session_state.topics, st.session_state.notes)
+        progress_percentage = (answered / total) if total > 0 else 0
+        st.sidebar.title("Progress")
+        st.sidebar.progress(progress_percentage)
+        st.sidebar.write(f"{answered}/{total} questions answered ({progress_percentage*100:.1f}%)")
 
         # Sidebar for topic selection
         st.sidebar.title("Navigation")
@@ -152,6 +172,7 @@ def main():
         if st.button("Save Notes"):
             save_notes(st.session_state.notes)
             st.success("Notes saved successfully!")
+            st.experimental_rerun()  # Rerun to update progress bar
 
         # Anki export button
         if st.sidebar.button("Export to Anki"):
