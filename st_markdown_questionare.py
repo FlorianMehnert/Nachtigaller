@@ -30,12 +30,13 @@ def parse_markdown(content):
 
 # Function to save notes
 # Function to save notes
+@st.cache_data
 def save_notes(notes):
     with open('notes.json', 'w') as f:
         json.dump(notes, f, default=lambda o: o.decode('utf-8') if isinstance(o, bytes) else o)
 
-
 # Function to load notes
+@st.cache_data
 def load_notes():
     if os.path.exists('notes.json'):
         with open('notes.json', 'r') as f:
@@ -95,24 +96,28 @@ def create_anki_deck(topics, notes):
 def main():
     st.title('Markdown Question Parser and Note Taker')
 
+    # Initialize session state
+    if 'notes' not in st.session_state:
+        st.session_state.notes = load_notes()
+
+    if 'topics' not in st.session_state:
+        st.session_state.topics = {}
+
     # File uploader
     uploaded_file = st.file_uploader("Choose a markdown file", type="md")
 
     if uploaded_file is not None:
         content = uploaded_file.getvalue().decode("utf-8")
-        topics = parse_markdown(content)
-
-        # Load existing notes
-        notes = load_notes()
+        st.session_state.topics = parse_markdown(content)
 
         # Sidebar for topic selection
         st.sidebar.title("Navigation")
-        selected_topic = st.sidebar.selectbox("Select a topic", list(topics.keys()))
+        selected_topic = st.sidebar.selectbox("Select a topic", list(st.session_state.topics.keys()))
 
         # Main content area
         st.header(selected_topic)
 
-        for subtopic, questions in topics[selected_topic].items():
+        for subtopic, questions in st.session_state.topics[selected_topic].items():
             st.subheader(subtopic)
             for i, question in enumerate(questions):
                 st.write(f"{i + 1}. {question}")
@@ -121,7 +126,7 @@ def main():
                 question_key = f"{selected_topic}_{subtopic}_{i}"
 
                 # Display existing note or empty string
-                existing_note = notes.get(question_key, {}).get('text', "")
+                existing_note = st.session_state.notes.get(question_key, {}).get('text', "")
                 note = st.text_area(f"Notes for question {i + 1}", value=existing_note, key=f"text_{question_key}")
 
                 # Image uploader
@@ -137,15 +142,20 @@ def main():
                     image.save(buffered, format="JPEG")
                     img_str = base64.b64encode(buffered.getvalue())
 
-                    notes[question_key] = {'text': note, 'image': img_str}
+                    st.session_state.notes[question_key] = {'text': note, 'image': img_str}
                 else:
-                    notes[question_key] = {'text': note, 'image': notes.get(question_key, {}).get('image')}
+                    st.session_state.notes[question_key] = {'text': note,
+                                                            'image': st.session_state.notes.get(question_key, {}).get(
+                                                                'image')}
 
-                save_notes(notes)
+        # Save notes button
+        if st.button("Save Notes"):
+            save_notes(st.session_state.notes)
+            st.success("Notes saved successfully!")
 
         # Anki export button
         if st.sidebar.button("Export to Anki"):
-            deck, media_files = create_anki_deck(topics, notes)
+            deck, media_files = create_anki_deck(st.session_state.topics, st.session_state.notes)
             deck_filename = "markdown_questions.apkg"
             package = genanki.Package(deck)
             package.media_files = media_files
