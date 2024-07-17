@@ -10,6 +10,7 @@ import datetime
 import time
 from io import BytesIO
 
+
 # Function to parse the markdown file
 def parse_markdown(content):
     topics = {}
@@ -35,6 +36,7 @@ def parse_markdown(content):
 def save_notes(notes):
     with open('notes.json', 'w') as f:
         json.dump(notes, f, default=lambda o: o.decode('utf-8') if isinstance(o, bytes) else o)
+
 
 # Function to load notes
 @st.cache_data
@@ -117,6 +119,9 @@ def main():
     if 'topics' not in st.session_state:
         st.session_state.topics = {}
 
+    if 'current_question_index' not in st.session_state:
+        st.session_state.current_question_index = 0
+
     # File uploader
     uploaded_file = st.file_uploader("Choose a markdown file", type="md")
 
@@ -133,50 +138,72 @@ def main():
 
         # Sidebar for topic selection
         st.sidebar.title("Navigation")
-        selected_topic = st.sidebar.selectbox("Select a topic", list(st.session_state.topics.keys()))
+        selected_topic = st.sidebar.selectbox("Select a topic", list(st.session_state.topics.keys()), key="topic_select")
 
-        # Main content area
-        st.header(selected_topic)
-
+        # Flatten questions for the selected topic
+        all_questions = []
         for subtopic, questions in st.session_state.topics[selected_topic].items():
-            st.subheader(subtopic)
-            for i, question in enumerate(questions):
-                st.write(f"{i + 1}. {question}")
+            all_questions.extend([(subtopic, q) for q in questions])
 
-                # Create a unique key for each question
-                question_key = f"{selected_topic}_{subtopic}_{i}"
+        # Question selection
+        question_options = [f"{i+1}. {q[1]}" for i, q in enumerate(all_questions)]
+        selected_question_index = st.sidebar.selectbox("Select a question", range(len(question_options)),
+                                                       format_func=lambda x: question_options[x],
+                                                       index=st.session_state.current_question_index,
+                                                       key="question_select")
 
-                # Initialize the question key in the notes if it doesn't exist
-                if question_key not in st.session_state.notes:
-                    st.session_state.notes[question_key] = {'text': '', 'image': None}
+        # Update current question index
+        st.session_state.current_question_index = selected_question_index
 
-                # Display existing note or empty string
-                existing_note = st.session_state.notes[question_key]['text']
-                note = st.text_area(f"Notes for question {i + 1}", value=existing_note, key=f"text_{question_key}")
+        # Navigation buttons
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if st.button("Previous"):
+                st.session_state.current_question_index = max(0, st.session_state.current_question_index - 1)
+                st.experimental_rerun()
+        with col3:
+            if st.button("Next"):
+                st.session_state.current_question_index = min(len(all_questions) - 1, st.session_state.current_question_index + 1)
+                st.experimental_rerun()
 
-                # Update the note text
-                st.session_state.notes[question_key]['text'] = note
+        # Display current question
+        current_subtopic, current_question = all_questions[st.session_state.current_question_index]
+        st.header(f"Question {st.session_state.current_question_index + 1}")
+        st.subheader(current_subtopic)
+        st.write(current_question)
 
-                # Image uploader
-                uploaded_image = st.file_uploader(f"Attach image to question {i + 1}", type=['png', 'jpg', 'jpeg'],
-                                                  key=f"image_{question_key}")
+        # Create a unique key for the current question
+        question_key = f"{selected_topic}_{current_subtopic}_{st.session_state.current_question_index}"
 
-                # Display existing image if available
-                existing_image = st.session_state.notes[question_key].get('image')
-                if existing_image:
-                    st.image(Image.open(io.BytesIO(base64.b64decode(existing_image))), caption='Attached Image',
-                             use_column_width=True)
+        # Initialize the question key in the notes if it doesn't exist
+        if question_key not in st.session_state.notes:
+            st.session_state.notes[question_key] = {'text': '', 'image': None}
 
-                if uploaded_image:
-                    image = Image.open(uploaded_image)
-                    st.image(image, caption='Newly Uploaded Image', use_column_width=True)
+        # Display existing note or empty string
+        existing_note = st.session_state.notes[question_key]['text']
+        note = st.text_area("Notes", value=existing_note, key=f"text_{question_key}")
 
-                    # Convert image to base64 for storage
-                    buffered = io.BytesIO()
-                    image.save(buffered, format="JPEG")
-                    img_str = base64.b64encode(buffered.getvalue())
+        # Update the note text
+        st.session_state.notes[question_key]['text'] = note
 
-                    st.session_state.notes[question_key]['image'] = img_str
+        # Image uploader
+        uploaded_image = st.file_uploader("Attach image", type=['png', 'jpg', 'jpeg'], key=f"image_{question_key}")
+
+        # Display existing image if available
+        existing_image = st.session_state.notes[question_key].get('image')
+        if existing_image:
+            st.image(Image.open(io.BytesIO(base64.b64decode(existing_image))), caption='Attached Image', use_column_width=True)
+
+        if uploaded_image:
+            image = Image.open(uploaded_image)
+            st.image(image, caption='Newly Uploaded Image', use_column_width=True)
+
+            # Convert image to base64 for storage
+            buffered = io.BytesIO()
+            image.save(buffered, format="JPEG")
+            img_str = base64.b64encode(buffered.getvalue())
+
+            st.session_state.notes[question_key]['image'] = img_str
 
         # Save notes button
         if st.button("Save Notes"):
@@ -205,6 +232,7 @@ def main():
             # Clean up media files
             for file in media_files:
                 os.remove(file)
+
 
 if __name__ == "__main__":
     main()
