@@ -6,7 +6,9 @@ import random
 import base64
 from PIL import Image
 import io
-
+import datetime
+import time
+from io import BytesIO
 
 # Function to parse the markdown file
 def parse_markdown(content):
@@ -30,7 +32,6 @@ def parse_markdown(content):
 
 # Function to save notes
 # Function to save notes
-@st.cache_data
 def save_notes(notes):
     with open('notes.json', 'w') as f:
         json.dump(notes, f, default=lambda o: o.decode('utf-8') if isinstance(o, bytes) else o)
@@ -128,7 +129,7 @@ def main():
         progress_percentage = (answered / total) if total > 0 else 0
         st.sidebar.title("Progress")
         st.sidebar.progress(progress_percentage)
-        st.sidebar.write(f"{answered}/{total} questions answered ({progress_percentage*100:.1f}%)")
+        st.sidebar.write(f"{answered}/{total} questions answered ({progress_percentage * 100:.1f}%)")
 
         # Sidebar for topic selection
         st.sidebar.title("Navigation")
@@ -145,28 +146,37 @@ def main():
                 # Create a unique key for each question
                 question_key = f"{selected_topic}_{subtopic}_{i}"
 
+                # Initialize the question key in the notes if it doesn't exist
+                if question_key not in st.session_state.notes:
+                    st.session_state.notes[question_key] = {'text': '', 'image': None}
+
                 # Display existing note or empty string
-                existing_note = st.session_state.notes.get(question_key, {}).get('text', "")
+                existing_note = st.session_state.notes[question_key]['text']
                 note = st.text_area(f"Notes for question {i + 1}", value=existing_note, key=f"text_{question_key}")
+
+                # Update the note text
+                st.session_state.notes[question_key]['text'] = note
 
                 # Image uploader
                 uploaded_image = st.file_uploader(f"Attach image to question {i + 1}", type=['png', 'jpg', 'jpeg'],
                                                   key=f"image_{question_key}")
 
+                # Display existing image if available
+                existing_image = st.session_state.notes[question_key].get('image')
+                if existing_image:
+                    st.image(Image.open(io.BytesIO(base64.b64decode(existing_image))), caption='Attached Image',
+                             use_column_width=True)
+
                 if uploaded_image:
                     image = Image.open(uploaded_image)
-                    st.image(image, caption='Attached Image', use_column_width=True)
+                    st.image(image, caption='Newly Uploaded Image', use_column_width=True)
 
                     # Convert image to base64 for storage
                     buffered = io.BytesIO()
                     image.save(buffered, format="JPEG")
                     img_str = base64.b64encode(buffered.getvalue())
 
-                    st.session_state.notes[question_key] = {'text': note, 'image': img_str}
-                else:
-                    st.session_state.notes[question_key] = {'text': note,
-                                                            'image': st.session_state.notes.get(question_key, {}).get(
-                                                                'image')}
+                    st.session_state.notes[question_key]['image'] = img_str
 
         # Save notes button
         if st.button("Save Notes"):
@@ -195,7 +205,6 @@ def main():
             # Clean up media files
             for file in media_files:
                 os.remove(file)
-
 
 if __name__ == "__main__":
     main()
