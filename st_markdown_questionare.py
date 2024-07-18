@@ -1,15 +1,14 @@
-import streamlit as st
-import json
-import os
-import genanki
-import random
 import base64
-from PIL import Image
 import io
-import datetime
+import os
+import random
+import sqlite3
 import time
-from io import BytesIO
 
+import pyperclip
+import genanki
+import streamlit as st
+from PIL import Image
 
 # Function to parse the markdown file
 def parse_markdown(content):
@@ -31,20 +30,33 @@ def parse_markdown(content):
     return topics
 
 
-# Function to save notes
-# Function to save notes
-def save_notes(notes):
-    with open('notes.json', 'w') as f:
-        json.dump(notes, f, default=lambda o: o.decode('utf-8') if isinstance(o, bytes) else o)
+def init_db():
+    conn = sqlite3.connect('notes.db')
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS notes
+                 (question_key TEXT PRIMARY KEY, note_text TEXT, image BLOB)''')
+    conn.commit()
+    conn.close()
 
 
-# Function to load notes
-@st.cache_data
+def save_notes():
+    conn = sqlite3.connect('notes.db')
+    c = conn.cursor()
+    for key, value in st.session_state.notes.items():
+        c.execute("INSERT OR REPLACE INTO notes (question_key, note_text, image) VALUES (?, ?, ?)",
+                  (key, value['text'], value.get('image')))
+    conn.commit()
+    conn.close()
+    st.session_state.saved = True
+
+
 def load_notes():
-    if os.path.exists('notes.json'):
-        with open('notes.json', 'r') as f:
-            return json.load(f)
-    return {}
+    conn = sqlite3.connect('notes.db')
+    c = conn.cursor()
+    c.execute("SELECT question_key, note_text, image FROM notes")
+    notes = {row[0]: {'text': row[1], 'image': row[2]} for row in c.fetchall()}
+    conn.close()
+    return notes
 
 
 # Function to create an Anki deck
@@ -95,7 +107,9 @@ def create_anki_deck(topics, notes):
     return deck, media_files
 
 
+@st.experimental_fragment
 def calculate_progress(topics, notes):
+    st.write(topics.items())
     total_questions = 0
     answered_questions = 0
     for topic, subtopics in topics.items():
@@ -103,14 +117,20 @@ def calculate_progress(topics, notes):
             for i, question in enumerate(questions):
                 total_questions += 1
                 question_key = f"{topic}_{subtopic}_{i}"
-                if question_key in notes and notes[question_key].get('text', '').strip():
+                if question_key in notes and notes[question_key]['text'].strip():
                     answered_questions += 1
-    return answered_questions, total_questions
+    progress_percentage = (answered_questions / total_questions) if total_questions > 0 else 0
+    st.title("Progress")
+    st.progress(progress_percentage)
+    st.write(f"{answered_questions}/{total_questions} questions answered ({progress_percentage * 100:.1f}%)")
 
 
 # Streamlit app
 def main():
     st.title('Markdown Question Parser and Note Taker')
+
+    # Initialize database
+    init_db()
 
     # Initialize session state
     if 'notes' not in st.session_state:
@@ -122,23 +142,28 @@ def main():
     if 'current_question_index' not in st.session_state:
         st.session_state.current_question_index = 0
 
+    if 'saved' not in st.session_state:
+        st.session_state.saved = False
+
+    if st.session_state.saved:
+        st.toast("saved")
+        st.session_state.saved = False
+
+
     # File uploader
     uploaded_file = st.file_uploader("Choose a markdown file", type="md")
 
     if uploaded_file is not None:
         content = uploaded_file.getvalue().decode("utf-8")
         st.session_state.topics = parse_markdown(content)
-
-        # Calculate and display progress
-        answered, total = calculate_progress(st.session_state.topics, st.session_state.notes)
-        progress_percentage = (answered / total) if total > 0 else 0
-        st.sidebar.title("Progress")
-        st.sidebar.progress(progress_percentage)
-        st.sidebar.write(f"{answered}/{total} questions answered ({progress_percentage * 100:.1f}%)")
+        with st.sidebar:
+            # Calculate and display progress
+            calculate_progress(st.session_state.topics, st.session_state.notes)
 
         # Sidebar for topic selection
         st.sidebar.title("Navigation")
-        selected_topic = st.sidebar.selectbox("Select a topic", list(st.session_state.topics.keys()), key="topic_select")
+        selected_topic = st.sidebar.selectbox("Select a topic", list(st.session_state.topics.keys()),
+                                              key="topic_select")
 
         # Flatten questions for the selected topic
         all_questions = []
@@ -146,11 +171,17 @@ def main():
             all_questions.extend([(subtopic, q) for q in questions])
 
         # Question selection
-        question_options = [f"{i+1}. {q[1]}" for i, q in enumerate(all_questions)]
-        selected_question_index = st.sidebar.selectbox("Select a question", range(len(question_options)),
-                                                       format_func=lambda x: question_options[x],
-                                                       index=st.session_state.current_question_index,
-                                                       key="question_select")
+        question_options = [f"{i + 1}. {q[1]}" for i, q in enumerate(all_questions)]
+        try:
+            selected_question_index = st.sidebar.selectbox("Select a question", range(len(question_options)),
+                                                           format_func=lambda x: question_options[x],
+                                                           index=st.session_state.current_question_index,
+                                                           key="question_select")
+        except Exception as e:
+            selected_question_index = st.sidebar.selectbox("Select a question", range(len(question_options)),
+                                                           format_func=lambda x: question_options[x],
+                                                           index=0,
+                                                           key="question_select")
 
         # Update current question index
         st.session_state.current_question_index = selected_question_index
@@ -158,19 +189,26 @@ def main():
         # Navigation buttons
         col1, col2, col3 = st.columns(3)
         with col1:
-            if st.button("Previous"):
+            if st.button("Previous", on_click=save_notes):
                 st.session_state.current_question_index = max(0, st.session_state.current_question_index - 1)
-                st.experimental_rerun()
+                st.session_state.saved = True
+                time.sleep(0.2)
+                st.rerun()
         with col3:
-            if st.button("Next"):
-                st.session_state.current_question_index = min(len(all_questions) - 1, st.session_state.current_question_index + 1)
-                st.experimental_rerun()
+            if st.button("Next", on_click=save_notes):
+                st.session_state.current_question_index = min(len(all_questions) - 1,
+                                                              st.session_state.current_question_index + 1)
+                st.session_state.saved = True
+                time.sleep(0.2)
+                st.rerun()
 
         # Display current question
         current_subtopic, current_question = all_questions[st.session_state.current_question_index]
         st.header(f"Question {st.session_state.current_question_index + 1}")
         st.subheader(current_subtopic)
         st.write(current_question)
+        if st.button("copy"):
+            pyperclip.copy(current_question)
 
         # Create a unique key for the current question
         question_key = f"{selected_topic}_{current_subtopic}_{st.session_state.current_question_index}"
@@ -192,7 +230,8 @@ def main():
         # Display existing image if available
         existing_image = st.session_state.notes[question_key].get('image')
         if existing_image:
-            st.image(Image.open(io.BytesIO(base64.b64decode(existing_image))), caption='Attached Image', use_column_width=True)
+            image_data = base64.b64decode(existing_image)
+            st.image(Image.open(io.BytesIO(image_data)), use_column_width=True)
 
         if uploaded_image:
             image = Image.open(uploaded_image)
@@ -200,16 +239,16 @@ def main():
 
             # Convert image to base64 for storage
             buffered = io.BytesIO()
-            image.save(buffered, format="JPEG")
-            img_str = base64.b64encode(buffered.getvalue())
+            if image.mode in ("RGBA", "P"):
+                image = image.convert("RGB")
+            image.save(buffered, format="JPEG", quality=85)
+            img_str = base64.b64encode(buffered.getvalue()).decode()
 
             st.session_state.notes[question_key]['image'] = img_str
 
-        # Save notes button
-        if st.button("Save Notes"):
-            save_notes(st.session_state.notes)
+        if st.button("Save Notes", on_click=save_notes):
             st.success("Notes saved successfully!")
-            st.experimental_rerun()  # Rerun to update progress bar
+            calculate_progress(st.session_state.topics, st.session_state.notes)
 
         # Anki export button
         if st.sidebar.button("Export to Anki"):
@@ -220,7 +259,7 @@ def main():
             package.write_to_file(deck_filename)
 
             with open(deck_filename, "rb") as file:
-                btn = st.sidebar.download_button(
+                st.sidebar.download_button(
                     label="Download Anki Deck",
                     data=file,
                     file_name=deck_filename,
