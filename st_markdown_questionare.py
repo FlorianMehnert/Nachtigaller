@@ -1,5 +1,6 @@
 import base64
 import io
+import itertools
 import os
 import random
 import sqlite3
@@ -9,6 +10,7 @@ import pyperclip
 import genanki
 import streamlit as st
 from PIL import Image
+
 
 # Function to parse the markdown file
 def parse_markdown(content):
@@ -43,17 +45,20 @@ def save_notes():
     conn = sqlite3.connect('notes.db')
     c = conn.cursor()
     for key, value in st.session_state.notes.items():
-        c.execute("INSERT OR REPLACE INTO notes (question_key, note_text, image) VALUES (?, ?, ?)",
-                  (key, value['text'], value.get('image')))
+        if value['text'].strip():  # Only save non-empty notes
+            c.execute("INSERT OR REPLACE INTO notes (question_key, note_text, image) VALUES (?, ?, ?)",
+                      (key, value['text'], value.get('image')))
+        else:
+            # If the note is empty, remove it from the database
+            c.execute("DELETE FROM notes WHERE question_key = ?", (key,))
     conn.commit()
     conn.close()
-    st.session_state.saved = True
 
 
 def load_notes():
     conn = sqlite3.connect('notes.db')
     c = conn.cursor()
-    c.execute("SELECT question_key, note_text, image FROM notes")
+    c.execute("SELECT question_key, note_text, image FROM notes WHERE note_text != ''")
     notes = {row[0]: {'text': row[1], 'image': row[2]} for row in c.fetchall()}
     conn.close()
     return notes
@@ -108,27 +113,25 @@ def create_anki_deck(topics, notes):
 
 
 @st.experimental_fragment
-def calculate_progress(topics, notes):
-    st.write(topics.items())
+def calculate_progress(topics):
+    conn = sqlite3.connect('notes.db')
+    c = conn.cursor()
+
     total_questions = 0
-    answered_questions = 0
     for topic, subtopics in topics.items():
         for subtopic, questions in subtopics.items():
-            for i, question in enumerate(questions):
-                total_questions += 1
-                question_key = f"{topic}_{subtopic}_{i}"
-                if question_key in notes and notes[question_key]['text'].strip():
-                    answered_questions += 1
-    progress_percentage = (answered_questions / total_questions) if total_questions > 0 else 0
-    st.title("Progress")
-    st.progress(progress_percentage)
-    st.write(f"{answered_questions}/{total_questions} questions answered ({progress_percentage * 100:.1f}%)")
+            total_questions += len(questions)
+
+    c.execute("SELECT COUNT(*) FROM notes WHERE note_text != ''")
+    answered_questions = c.fetchone()[0]
+
+    conn.close()
+
+    return answered_questions, total_questions
 
 
 # Streamlit app
 def main():
-    st.title('Markdown Question Parser and Note Taker')
-
     # Initialize database
     init_db()
 
@@ -149,16 +152,20 @@ def main():
         st.toast("saved")
         st.session_state.saved = False
 
-
     # File uploader
-    uploaded_file = st.file_uploader("Choose a markdown file", type="md")
+    uploaded_file = st.sidebar.file_uploader("Choose a markdown file", type="md")
 
     if uploaded_file is not None:
         content = uploaded_file.getvalue().decode("utf-8")
         st.session_state.topics = parse_markdown(content)
         with st.sidebar:
             # Calculate and display progress
-            calculate_progress(st.session_state.topics, st.session_state.notes)
+            calculate_progress(st.session_state.topics)
+            answered, total = calculate_progress(st.session_state.topics)
+            progress_percentage = (answered / total) if total > 0 else 0
+            st.sidebar.title("Progress")
+            st.sidebar.progress(progress_percentage)
+            st.sidebar.write(f"{answered}/{total} questions answered ({progress_percentage * 100:.1f}%)")
 
         # Sidebar for topic selection
         st.sidebar.title("Navigation")
@@ -186,14 +193,23 @@ def main():
         # Update current question index
         st.session_state.current_question_index = selected_question_index
 
+
+        # Display current question
+        current_subtopic, current_question = all_questions[st.session_state.current_question_index]
+        st.header(f"{current_subtopic}: Q{st.session_state.current_question_index + 1}")
+
+        st.write(current_question)
         # Navigation buttons
-        col1, col2, col3 = st.columns(3)
+        col1, col2, col3 = st.columns([.4,.2,.4])
         with col1:
             if st.button("Previous", on_click=save_notes):
                 st.session_state.current_question_index = max(0, st.session_state.current_question_index - 1)
                 st.session_state.saved = True
                 time.sleep(0.2)
                 st.rerun()
+        with col2:
+            if st.button("copy"):
+                pyperclip.copy(current_question)
         with col3:
             if st.button("Next", on_click=save_notes):
                 st.session_state.current_question_index = min(len(all_questions) - 1,
@@ -201,14 +217,6 @@ def main():
                 st.session_state.saved = True
                 time.sleep(0.2)
                 st.rerun()
-
-        # Display current question
-        current_subtopic, current_question = all_questions[st.session_state.current_question_index]
-        st.header(f"Question {st.session_state.current_question_index + 1}")
-        st.subheader(current_subtopic)
-        st.write(current_question)
-        if st.button("copy"):
-            pyperclip.copy(current_question)
 
         # Create a unique key for the current question
         question_key = f"{selected_topic}_{current_subtopic}_{st.session_state.current_question_index}"
@@ -248,7 +256,7 @@ def main():
 
         if st.button("Save Notes", on_click=save_notes):
             st.success("Notes saved successfully!")
-            calculate_progress(st.session_state.topics, st.session_state.notes)
+            calculate_progress(st.session_state.topics)
 
         # Anki export button
         if st.sidebar.button("Export to Anki"):
