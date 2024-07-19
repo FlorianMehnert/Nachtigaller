@@ -10,6 +10,7 @@ import pyperclip
 import genanki
 import streamlit as st
 from PIL import Image
+from streamlit_shortcuts import add_keyboard_shortcuts
 
 
 # Function to parse the markdown file
@@ -41,7 +42,9 @@ def init_db():
     conn.close()
 
 
+@st.experimental_fragment
 def save_notes():
+    st.balloons()
     conn = sqlite3.connect('notes.db')
     c = conn.cursor()
     for key, value in st.session_state.notes.items():
@@ -130,7 +133,6 @@ def calculate_progress(topics):
     return answered_questions, total_questions
 
 
-# Streamlit app
 def main():
     # Initialize database
     init_db()
@@ -149,7 +151,6 @@ def main():
         st.session_state.saved = False
 
     if st.session_state.saved:
-        st.toast("saved")
         st.session_state.saved = False
 
     # File uploader
@@ -193,19 +194,18 @@ def main():
         # Update current question index
         st.session_state.current_question_index = selected_question_index
 
-
         # Display current question
         current_subtopic, current_question = all_questions[st.session_state.current_question_index]
         st.header(f"{current_subtopic}: Q{st.session_state.current_question_index + 1}")
 
         st.write(current_question)
         # Navigation buttons
-        col1, col2, col3 = st.columns([.4,.2,.4])
+        col1, col2, col3 = st.columns([.4, .2, .4])
         with col1:
             if st.button("Previous", on_click=save_notes):
                 st.session_state.current_question_index = max(0, st.session_state.current_question_index - 1)
                 st.session_state.saved = True
-                time.sleep(0.2)
+                time.sleep(0.1)
                 st.rerun()
         with col2:
             if st.button("copy"):
@@ -215,8 +215,12 @@ def main():
                 st.session_state.current_question_index = min(len(all_questions) - 1,
                                                               st.session_state.current_question_index + 1)
                 st.session_state.saved = True
-                time.sleep(0.2)
+                time.sleep(0.1)
                 st.rerun()
+            add_keyboard_shortcuts({
+                ',': 'Previous',
+                '.': 'Next',
+            })
 
         # Create a unique key for the current question
         question_key = f"{selected_topic}_{current_subtopic}_{st.session_state.current_question_index}"
@@ -226,8 +230,14 @@ def main():
             st.session_state.notes[question_key] = {'text': '', 'image': None}
 
         # Display existing note or empty string
+        if question_key not in st.session_state.notes:
+            st.session_state.notes[question_key] = {'text': ''}
         existing_note = st.session_state.notes[question_key]['text']
-        note = st.text_area("Notes", value=existing_note, key=f"text_{question_key}")
+
+        def update_note():
+            st.session_state.notes[question_key]['text'] = st.session_state[f"text_{question_key}"]
+
+        note = st.text_area("Notes", value=existing_note, key=f"text_{question_key}", on_change=update_note)
 
         # Update the note text
         st.session_state.notes[question_key]['text'] = note
@@ -255,7 +265,7 @@ def main():
             st.session_state.notes[question_key]['image'] = img_str
 
         if st.button("Save Notes", on_click=save_notes):
-            st.success("Notes saved successfully!")
+            st.balloons()
             calculate_progress(st.session_state.topics)
 
         # Anki export button
